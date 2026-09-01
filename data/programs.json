@@ -1,3 +1,16 @@
 {
-  "programs": []
+  "programs": [
+    {
+      "name": "イッテQ",
+      "url": "https://tver.jp/series/sr9gfdf2ex"
+    },
+    {
+      "name": "1泊家族",
+      "url": "https://tver.jp/series/srhd20i6am"
+    },
+    {
+      "name": "VIVANT",
+      "url": "https://tver.jp/series/srufa4d98z"
+    }
+  ]
 }
