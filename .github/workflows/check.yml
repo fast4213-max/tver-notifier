@@ -1,0 +1,61 @@
+# check.yml
+# ---------
+# このワークフローは「時間になったら自動で動く」設定（schedule）を使いません。
+# 代わりに、外部のcronサービス（cron-job.orgなど）から
+# GitHubのAPI経由で「repository_dispatch」というイベントを送ってもらい、
+# それをきっかけに動く仕組みです。
+#
+# 送ってもらうリクエストのイメージ：
+#   POST https://api.github.com/repos/{あなたのユーザー名}/{リポジトリ名}/dispatches
+#   Header: Authorization: token <GitHubトークン>
+#   Header: Accept: application/vnd.github+json
+#   Body:   {"event_type": "tver-check"}
+#
+# 上記の event_type と、下の types の値 "tver-check" が一致していることが重要です。
+
+name: TVer Check and Notify
+
+on:
+  repository_dispatch:
+    types: [tver-check]
+  # 動作確認のため、GitHubの画面から手動でも実行できるようにしておきます
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    # data/seen.json をこのワークフロー自身がコミットして書き戻すために必要な権限
+    permissions:
+      contents: write
+
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+
+      - name: Pythonをセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 依存パッケージをインストール
+        run: pip install -r requirements.txt
+
+      - name: TVer通知スクリプトを実行（本番モード）
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python src/main.py --mode=normal
+
+      - name: 既読情報(seen.json)の変更をコミット
+        run: |
+          git config user.name "tver-notifier-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/seen.json
+          # 変更が無い場合にコミットしようとするとエラーになるため、
+          # 変更があるときだけコミット＆プッシュする
+          if ! git diff --cached --quiet; then
+            git commit -m "既読エピソード情報を更新"
+            git push
+          else
+            echo "seen.jsonに変更はありませんでした。コミットはスキップします。"
+          fi
