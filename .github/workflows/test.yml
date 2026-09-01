@@ -1,0 +1,36 @@
+# test.yml
+# --------
+# 動作確認用のワークフローです。
+# GitHubの「Actions」タブから手動で「Run workflow」ボタンを押したときだけ動きます。
+# 自動実行（cronやschedule）は一切設定していません。
+#
+# 全番組の中から最新1件だけをDiscordに通知します。
+# 既読(seen.json)は更新しないので、何度実行しても同じ1件が通知されます。
+# 「Discordに正しく通知が届くか」「Webhookの設定は合っているか」を
+# 手軽に確認するためのものです。
+
+name: TVer Test Notify (Manual)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+
+      - name: Pythonをセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 依存パッケージをインストール
+        run: pip install -r requirements.txt
+
+      - name: TVer通知スクリプトを実行（テストモード）
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python src/main.py --mode=test
