@@ -54,22 +54,34 @@ def extract_series_id(series_url):
     return match.group(1)
 
 
-def _get_json(url, method="GET", data=None, params=None, note=""):
+def _get_json(url, method="GET", data=None, params=None, note="", extra_headers=None):
     """
     requestsでJSONを取得する共通処理。
     失敗した場合は TverApiError にまとめて変換する。
     """
+    headers = {**HEADERS, **(extra_headers or {})}
     try:
         if method == "POST":
             resp = requests.post(
-                url, data=data, headers=HEADERS, timeout=REQUEST_TIMEOUT
+                url, data=data, headers=headers, timeout=REQUEST_TIMEOUT
             )
         else:
             resp = requests.get(
-                url, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT
+                url, params=params, headers=headers, timeout=REQUEST_TIMEOUT
             )
         resp.raise_for_status()
         return resp.json()
+    except requests.exceptions.HTTPError as e:
+        # サーバーが返してきた本文（エラー詳細）もログに残す。原因調査がしやすくなる。
+        body_preview = ""
+        try:
+            body_preview = resp.text[:300]
+        except Exception:
+            pass
+        raise TverApiError(
+            f"{note}: 通信エラーが発生しました ({e})"
+            + (f" / レスポンス内容: {body_preview}" if body_preview else "")
+        )
     except requests.exceptions.RequestException as e:
         raise TverApiError(f"{note}: 通信エラーが発生しました ({e})")
     except ValueError as e:
@@ -82,11 +94,16 @@ def create_session():
     TVerのAPIを呼ぶ前に必要な「セッション情報」を取得する。
     platform_uid と platform_token という2つの値をこの後のAPI呼び出しで
     毎回クエリパラメータとして付ける必要がある。
+
+    このリクエストは "device_type=pc" というフォームデータを
+    Content-Type: application/x-www-form-urlencoded として送る必要がある。
+    （明示的に指定しないと、TVer側に正しく解釈されず400エラーになることがある）
     """
     data = _get_json(
         "https://platform-api.tver.jp/v2/api/platform_users/browser/create",
         method="POST",
-        data=b"device_type=pc",
+        data="device_type=pc",
+        extra_headers={"Content-Type": "application/x-www-form-urlencoded"},
         note="セッション作成",
     )
     try:
