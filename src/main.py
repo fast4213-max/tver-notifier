@@ -3,9 +3,21 @@ main.py
 -------
 このスクリプトが全体の司令塔です。GitHub Actionsから実行されるのはこのファイルです。
 
-実行モードは2つ：
-  --mode=normal : 本番用。未読エピソードを最大10件通知し、seen.jsonを更新する
-  --mode=test   : テスト用。全番組の中から最新1件だけ通知する（seen.jsonは更新しない）
+実行モードは3つ：
+  --mode=baseline : 初回セットアップ用。Discordには何も通知せず、
+                    その時点で配信されている全エピソードを「既読」として
+                    一気にseen.jsonへ登録する。
+  --mode=normal   : 本番用。未読エピソードを最大10件通知し、seen.jsonを更新する
+  --mode=test     : テスト用。全番組の中から最新1件だけ通知する（seen.jsonは更新しない）
+
+★baselineモードはなぜ必要か★
+新しく番組をprograms.jsonに登録した直後にいきなり --mode=normal を実行すると、
+その番組の「配信中の全話」がまだ一度もseen.jsonに記録されていないため、
+すべて「新着」とみなされて大量通知されてしまいます（過去話も含めて）。
+そこで、番組を登録した直後に一度だけ --mode=baseline を実行しておくと、
+「今配信されている分はもう知っている」という状態を作れます。
+以降 --mode=normal を回したときは、本当に新しく追加された話数だけが
+通知されるようになります。
 
 流れ（normalモードの場合）：
   1. data/programs.json から登録番組(シリーズ)一覧を読む
@@ -32,9 +44,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="TVer新着通知スクリプト")
     parser.add_argument(
         "--mode",
-        choices=["normal", "test"],
+        choices=["normal", "test", "baseline"],
         default="normal",
-        help="normal=本番実行 / test=テスト実行（最新1件のみ、既読化しない）",
+        help=(
+            "normal=本番実行 / "
+            "test=テスト実行（最新1件のみ、既読化しない） / "
+            "baseline=初回登録用（通知せず全話を既読化する）"
+        ),
     )
     return parser.parse_args()
 
@@ -134,6 +150,57 @@ def run_normal():
         print("一部の番組でエラーが発生し、Discordに通知しました。")
 
 
+def run_baseline():
+    """
+    初回セットアップ用モード。
+
+    Discordには一切通知せず、登録されている全番組について
+    「現在配信されているエピソードすべて」をseen.jsonに書き込む。
+
+    使いどころ：
+    - programs.jsonに新しい番組を追加した直後
+    - 「過去話も含めて全部通知されると困る、今後の新着だけでいい」という場合
+    """
+    programs = state.load_programs()
+
+    if not programs:
+        print("programs.json に登録された番組がありません。何もせず終了します。")
+        return
+
+    seen_dict = state.load_seen()
+    error_messages = []
+
+    try:
+        session = tver_client.create_session()
+    except tver_client.TverApiError as e:
+        discord_notifier.send_error_log(f"[初回登録処理] セッション作成に失敗しました。\n{e}")
+        sys.exit(1)
+
+    total_registered = 0
+
+    for program in programs:
+        series_url = program.get("url", "")
+        try:
+            series_id = tver_client.extract_series_id(series_url)
+            episodes = tver_client.get_latest_episodes(series_id, session)
+        except tver_client.TverApiError as e:
+            error_messages.append(f"[番組取得エラー] URL={series_url}\n{e}")
+            continue
+
+        for ep in episodes:
+            state.add_seen_episode(seen_dict, series_id, ep["episode_id"])
+        total_registered += len(episodes)
+        print(f"{series_url} : {len(episodes)}件を既読登録しました。")
+
+    state.save_seen(seen_dict)
+    print(f"合計 {total_registered} 件を既読として登録しました。（Discord通知はしていません）")
+
+    if error_messages:
+        combined = "\n\n".join(error_messages)
+        discord_notifier.send_error_log(combined)
+        print("一部の番組でエラーが発生し、Discordに通知しました。")
+
+
 def run_test():
     """
     テストモード：全番組を確認し、最新1件だけをDiscordに通知する。
@@ -191,6 +258,8 @@ def main():
     args = parse_args()
     if args.mode == "test":
         run_test()
+    elif args.mode == "baseline":
+        run_baseline()
     else:
         run_normal()
 
