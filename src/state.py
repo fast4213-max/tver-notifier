@@ -38,6 +38,49 @@ def load_programs():
     return data.get("programs", [])
 
 
+def load_global_exclude_keywords():
+    """
+    data/programs.json のトップレベルにある "exclude_keywords" を読み込む。
+    ここに書いたキーワードは、全番組共通で
+    「タイトルにこの単語が含まれていたら通知しない」対象になる。
+
+    例: ["ダイジェスト", "解説", "インタビュー"]
+    """
+    with open(PROGRAMS_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("exclude_keywords", [])
+
+
+def get_exclude_keywords_for_program(program, global_keywords):
+    """
+    1つの番組(program)について、実際に適用する除外キーワードの一覧を返す。
+    「全体共通のキーワード」＋「その番組だけの追加キーワード(exclude_keywords)」
+    を合体させたもの。
+
+    programs.json の1件にこう書くと、その番組だけの追加キーワードを設定できる：
+    {
+        "name": "番組メモ",
+        "url": "https://tver.jp/series/srXXXXXXXX",
+        "exclude_keywords": ["未公開", "総集編"]
+    }
+    """
+    program_keywords = program.get("exclude_keywords", [])
+    # 重複を除きつつ、順序はあまり気にしなくてよい（判定にしか使わないため）
+    return list(set(global_keywords) | set(program_keywords))
+
+
+def is_title_excluded(title, exclude_keywords):
+    """
+    エピソードのタイトルに、除外キーワードのどれか1つでも含まれていたら
+    True（＝通知しない）を返す。含まれていなければ False。
+    大文字・小文字や全角半角までは吸収しない、単純な部分一致判定。
+    """
+    for keyword in exclude_keywords:
+        if keyword and keyword in title:
+            return True
+    return False
+
+
 def load_seen():
     """
     data/seen.json を読み込んで、シリーズIDごとの既読エピソードID一覧を返す。
