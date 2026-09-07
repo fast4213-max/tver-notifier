@@ -1,5 +1,5 @@
 {
-  "exclude_keywords": ["ダイジェスト", "解説", "インタビュー"],
+  "exclude_keywords": ["ダイジェスト", "解説", "インタビュー","予告"],
   "programs": [
     {
       "name": "イッテQ",
