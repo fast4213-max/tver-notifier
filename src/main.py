@@ -55,9 +55,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def collect_unread_episodes(programs, seen_dict, session, error_messages):
+def collect_unread_episodes(programs, seen_dict, session, error_messages, global_keywords):
     """
     登録されている全番組について、未読エピソードを集める。
+    ただし、タイトルに除外キーワード（ダイジェスト・解説・インタビュー等）を
+    含むエピソードはここで弾き、通知対象にもseen.json登録対象にもしない。
 
     戻り値: [
         {
@@ -75,9 +77,11 @@ def collect_unread_episodes(programs, seen_dict, session, error_messages):
     追加した上で、その番組だけスキップして処理を続ける。
     """
     unread_list = []
+    filtered_count = 0
 
     for program in programs:
         series_url = program.get("url", "")
+        exclude_keywords = state.get_exclude_keywords_for_program(program, global_keywords)
         try:
             series_id = tver_client.extract_series_id(series_url)
             series_title = tver_client.get_series_title(series_id, session)
@@ -95,6 +99,12 @@ def collect_unread_episodes(programs, seen_dict, session, error_messages):
         for ep in episodes:
             if ep["episode_id"] in already_seen:
                 continue
+            if state.is_title_excluded(ep["title"], exclude_keywords):
+                # フィルタで弾いたエピソードはseen.jsonにも入れない。
+                # 理由：将来同じタイトルパターンでも通知したくなった場合、
+                # 再度候補として拾えるようにするため。
+                filtered_count += 1
+                continue
             unread_list.append(
                 {
                     "series_id": series_id,
@@ -105,7 +115,7 @@ def collect_unread_episodes(programs, seen_dict, session, error_messages):
                 }
             )
 
-    return unread_list
+    return unread_list, filtered_count
 
 
 def run_normal():
@@ -116,6 +126,7 @@ def run_normal():
         return
 
     seen_dict = state.load_seen()
+    global_keywords = state.load_global_exclude_keywords()
     error_messages = []
 
     try:
@@ -126,7 +137,9 @@ def run_normal():
         discord_notifier.send_error_log(f"セッション作成に失敗し、処理全体を中止しました。\n{e}")
         sys.exit(1)
 
-    unread_list = collect_unread_episodes(programs, seen_dict, session, error_messages)
+    unread_list, filtered_count = collect_unread_episodes(
+        programs, seen_dict, session, error_messages, global_keywords
+    )
 
     # 未読のうち先頭10件だけ今回通知する。残りは何もしない＝次回に自動で持ち越される
     to_notify = unread_list[:MAX_NOTIFY_PER_RUN]
@@ -140,6 +153,9 @@ def run_normal():
         print(f"{len(to_notify)}件通知しました。")
     else:
         print("新着エピソードはありませんでした。")
+
+    if filtered_count > 0:
+        print(f"{filtered_count}件はフィルタ（除外キーワード）により通知対象から除外しました。")
 
     if carried_over_count > 0:
         print(f"{carried_over_count}件は次回の実行に持ち越します。")
@@ -168,6 +184,7 @@ def run_baseline():
         return
 
     seen_dict = state.load_seen()
+    global_keywords = state.load_global_exclude_keywords()
     error_messages = []
 
     try:
@@ -177,9 +194,11 @@ def run_baseline():
         sys.exit(1)
 
     total_registered = 0
+    total_filtered = 0
 
     for program in programs:
         series_url = program.get("url", "")
+        exclude_keywords = state.get_exclude_keywords_for_program(program, global_keywords)
         try:
             series_id = tver_client.extract_series_id(series_url)
             episodes = tver_client.get_latest_episodes(series_id, session)
@@ -187,13 +206,23 @@ def run_baseline():
             error_messages.append(f"[番組取得エラー] URL={series_url}\n{e}")
             continue
 
+        registered_here = 0
         for ep in episodes:
+            if state.is_title_excluded(ep["title"], exclude_keywords):
+                # フィルタ対象はbaselineでも既読登録しない。
+                # 将来フィルタ条件を変えたときに拾い直せるようにするため。
+                total_filtered += 1
+                continue
             state.add_seen_episode(seen_dict, series_id, ep["episode_id"])
-        total_registered += len(episodes)
-        print(f"{series_url} : {len(episodes)}件を既読登録しました。")
+            registered_here += 1
+
+        total_registered += registered_here
+        print(f"{series_url} : {registered_here}件を既読登録しました。")
 
     state.save_seen(seen_dict)
     print(f"合計 {total_registered} 件を既読として登録しました。（Discord通知はしていません）")
+    if total_filtered > 0:
+        print(f"{total_filtered}件はフィルタ（除外キーワード）により既読登録の対象外としました。")
 
     if error_messages:
         combined = "\n\n".join(error_messages)
@@ -213,6 +242,7 @@ def run_test():
         return
 
     error_messages = []
+    global_keywords = state.load_global_exclude_keywords()
 
     try:
         session = tver_client.create_session()
@@ -220,10 +250,11 @@ def run_test():
         discord_notifier.send_error_log(f"[テスト実行] セッション作成に失敗しました。\n{e}")
         sys.exit(1)
 
-    # テストなので「既読」は無視し、各番組の最新1件（一覧の最後の要素）を候補にする
+    # テストなので「既読」は無視し、各番組の最新1件（フィルタ通過分のうち一覧の最後の要素）を候補にする
     candidates = []
     for program in programs:
         series_url = program.get("url", "")
+        exclude_keywords = state.get_exclude_keywords_for_program(program, global_keywords)
         try:
             series_id = tver_client.extract_series_id(series_url)
             series_title = tver_client.get_series_title(series_id, session)
@@ -232,8 +263,13 @@ def run_test():
             error_messages.append(f"[番組取得エラー] URL={series_url}\n{e}")
             continue
 
-        if episodes:
-            latest = episodes[-1]
+        # フィルタに引っかからないものだけを候補にする
+        passable_episodes = [
+            ep for ep in episodes if not state.is_title_excluded(ep["title"], exclude_keywords)
+        ]
+
+        if passable_episodes:
+            latest = passable_episodes[-1]
             candidates.append(
                 {
                     "title": latest["title"],
