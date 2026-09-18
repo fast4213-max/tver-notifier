@@ -146,11 +146,18 @@ def run_normal():
     carried_over_count = len(unread_list) - len(to_notify)
 
     if to_notify:
-        discord_notifier.send_episode_notifications(to_notify)
-        for ep in to_notify:
-            state.add_seen_episode(seen_dict, ep["series_id"], ep["episode_id"])
-        state.save_seen(seen_dict)
-        print(f"{len(to_notify)}件通知しました。")
+        try:
+            discord_notifier.send_episode_notifications(to_notify)
+        except discord_notifier.DiscordNotifyError as e:
+            # 通知に失敗した場合はseen.jsonを更新しない
+            # （＝次回また同じ内容で通知を再試行できるようにするため）。
+            # ここで処理を止めずに他のエラー通知は続けて送る。
+            error_messages.append(f"[Discord通知エラー]\n{e}")
+        else:
+            for ep in to_notify:
+                state.add_seen_episode(seen_dict, ep["series_id"], ep["episode_id"])
+            state.save_seen(seen_dict)
+            print(f"{len(to_notify)}件通知しました。")
     else:
         print("新着エピソードはありませんでした。")
 
@@ -279,8 +286,12 @@ def run_test():
             )
 
     if candidates:
-        discord_notifier.send_episode_notifications(candidates[:1])
-        print("テスト通知を1件送信しました。（seen.jsonは更新していません）")
+        try:
+            discord_notifier.send_episode_notifications(candidates[:1])
+        except discord_notifier.DiscordNotifyError as e:
+            error_messages.append(f"[Discord通知エラー]\n{e}")
+        else:
+            print("テスト通知を1件送信しました。（seen.jsonは更新していません）")
     else:
         print("通知できるエピソードが見つかりませんでした。")
 

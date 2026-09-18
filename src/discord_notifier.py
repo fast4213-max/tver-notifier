@@ -16,6 +16,7 @@ import os
 import requests
 
 DISCORD_EMBED_LIMIT_PER_MESSAGE = 10  # Discordの仕様上、1メッセージに入れられるEmbedの上限
+DISCORD_EMBED_TITLE_LIMIT = 256  # Discordの仕様上、Embedのtitleに入れられる文字数の上限
 REQUEST_TIMEOUT = 15
 
 
@@ -44,6 +45,10 @@ def _build_embed(title, thumbnail_url, series_title):
     1件のエピソード情報から、Discordの「Embed」1件分のデータを組み立てる。
     要件通り「タイトル」と「画像」のみのシンプルな構成。
     """
+    # Discord側のtitle文字数上限(256文字)を超えると、そのEmbed 1件だけでなく
+    # バッチ全体(最大10件)が400エラーで送信失敗になってしまうため、ここで切り詰める。
+    if len(title) > DISCORD_EMBED_TITLE_LIMIT:
+        title = title[: DISCORD_EMBED_TITLE_LIMIT - 1] + "…"
     return {
         "title": title,
         "description": f"番組: {series_title}" if series_title else None,
@@ -99,17 +104,20 @@ def send_error_log(message):
     """
     「TVerの構造変化などで取得に失敗した」等のエラーログをDiscordに送る。
     通常のエピソード通知とは別枠で、シンプルなテキストメッセージとして送信する。
-    """
-    webhook_url = _get_webhook_url()
 
+    ここは「最後の手段」として呼ばれる関数なので、Webhook URL未設定も含めて
+    ここで何が起きてもこの関数自体は例外を投げない
+    （呼び出し側をクラッシュさせないため。標準出力にだけ残す）。
+    """
     payload = {
         "content": f"⚠️ **TVer通知botエラー**\n```\n{message}\n```"
     }
 
     try:
+        webhook_url = _get_webhook_url()
         resp = requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
-    except requests.exceptions.RequestException as e:
+    except (DiscordNotifyError, requests.exceptions.RequestException) as e:
         # ここで失敗しても、これ以上通知する手段がないので標準出力にだけ残す
         # （GitHub Actionsのログで確認できるようにするため）
         print(f"[ERROR] エラーログのDiscord送信自体にも失敗しました: {e}")
