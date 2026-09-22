@@ -18,8 +18,20 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROGRAMS_PATH = os.path.join(BASE_DIR, "data", "programs.json")
 SEEN_PATH = os.path.join(BASE_DIR, "data", "seen.json")
 
-# 1シリーズあたり、既読IDを何件まで保持するか（それを超えたら古い順に切り捨て）
-SEEN_LIMIT_PER_SERIES = 50
+# 1シリーズあたり、既読IDを何件まで保持するか（それを超えたら先頭から切り捨て）
+#
+# ★なぜ大きめの値にしてあるか★
+# 切り捨てられたエピソードが再び配信中だった場合、「未読」とみなされて
+# もう一度通知されてしまう。つまり切り捨ては少ないほど安全。
+# またエピソード一覧は「シーズンごとに古い→新しい」順であって、
+# シーズンをまたいだ厳密な時系列にはなっていない（TVer APIが
+# シーズン横断の並び順を返さないため）。そのため切り捨てが起きると
+# 本編より特典・予告シーズンのIDが残ってしまう可能性がある。
+# IDは1件約12文字しかなくファイルサイズはたかが知れているので、
+# 「通常は絶対に切り捨てが起きない」水準まで余裕を持たせ、
+# ここは純粋に無限肥大を防ぐ最後の歯止めとして扱う。
+# （週1回放送の番組なら500件で約10年分に相当する）
+SEEN_LIMIT_PER_SERIES = 500
 
 
 def load_programs():
@@ -103,6 +115,10 @@ def save_seen(seen_dict):
     既読エピソードID一覧を data/seen.json に書き込む。
     各シリーズごとに直近 SEEN_LIMIT_PER_SERIES 件だけ残し、
     古いものは切り捨てる（ファイルが無限に大きくならないようにするため）。
+
+    ※ seen_dict の各リストは「古い→新しい」順に積まれている前提。
+       この順序が崩れると新しいエピソードの方を切り捨ててしまい、
+       再通知の原因になる。
     """
     trimmed = {}
     for series_id, episode_ids in seen_dict.items():
