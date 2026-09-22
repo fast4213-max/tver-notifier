@@ -17,6 +17,7 @@ import requests
 
 DISCORD_EMBED_LIMIT_PER_MESSAGE = 10  # Discordの仕様上、1メッセージに入れられるEmbedの上限
 DISCORD_EMBED_TITLE_LIMIT = 256  # Discordの仕様上、Embedのtitleに入れられる文字数の上限
+DISCORD_CONTENT_LIMIT = 2000  # Discordの仕様上、contentに入れられる文字数の上限
 REQUEST_TIMEOUT = 15
 
 
@@ -49,11 +50,15 @@ def _build_embed(title, thumbnail_url, series_title):
     # バッチ全体(最大10件)が400エラーで送信失敗になってしまうため、ここで切り詰める。
     if len(title) > DISCORD_EMBED_TITLE_LIMIT:
         title = title[: DISCORD_EMBED_TITLE_LIMIT - 1] + "…"
-    return {
-        "title": title,
-        "description": f"番組: {series_title}" if series_title else None,
-        "image": {"url": thumbnail_url} if thumbnail_url else None,
-    }
+
+    # 値が無いキーは None を入れずに、キーごと省く。
+    # Discordに "image": null のような形で送るのを避けるため。
+    embed = {"title": title}
+    if series_title:
+        embed["description"] = f"番組: {series_title}"
+    if thumbnail_url:
+        embed["image"] = {"url": thumbnail_url}
+    return embed
 
 
 def send_episode_notifications(episodes):
@@ -109,9 +114,16 @@ def send_error_log(message):
     ここで何が起きてもこの関数自体は例外を投げない
     （呼び出し側をクラッシュさせないため。標準出力にだけ残す）。
     """
-    payload = {
-        "content": f"⚠️ **TVer通知botエラー**\n```\n{message}\n```"
-    }
+    # Discordのcontentは2000文字までで、超えると送信自体が400エラーになる。
+    # エラー通知が丸ごと届かなくなるのが一番困るので、ここで切り詰めておく。
+    header = "⚠️ **TVer通知botエラー**\n```\n"
+    footer = "\n```"
+    omitted_note = "\n（長すぎるため以降は省略しました）"
+    budget = DISCORD_CONTENT_LIMIT - len(header) - len(footer)
+    if len(message) > budget:
+        message = message[: budget - len(omitted_note)] + omitted_note
+
+    payload = {"content": f"{header}{message}{footer}"}
 
     try:
         webhook_url = _get_webhook_url()

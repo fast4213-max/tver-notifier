@@ -151,7 +151,22 @@ def get_latest_episodes(series_id, session):
     という3階層になっているため、まずシーズン一覧を取り、
     各シーズンのエピソード一覧を集める、という2段階の処理になっている。
 
-    戻り値: [{"episode_id": "epXXXXXXXX", "title": "...", "thumbnail_url": "..."}, ...]
+    ★並び順について★
+    TVerのAPIは、各シーズンのエピソードを「新しい順」で返してくる。
+    一方このプロジェクトでは「古い順」で扱いたい（古い話から順に通知し、
+    seen.jsonの古い分から切り捨てたいため）。
+    そこでシーズンごとに順序を反転させ、戻り値は
+    「シーズンごとに古い→新しい」の並びに揃えている。
+
+    戻り値: [
+        {
+            "episode_id": "epXXXXXXXX",
+            "title": "...",
+            "thumbnail_url": "...",
+            "season_index": 0,   # シーズン一覧での並び順(0が本編などの主シーズン)
+        },
+        ...
+    ]
     """
     seasons_data = _call_platform_api(
         f"v1/callSeriesSeasons/{series_id}",
@@ -178,7 +193,7 @@ def get_latest_episodes(series_id, session):
         )
 
     episodes = []
-    for season_id in season_ids:
+    for season_index, season_id in enumerate(season_ids):
         episodes_data = _call_platform_api(
             f"v1/callSeasonEpisodes/{season_id}",
             session,
@@ -192,6 +207,7 @@ def get_latest_episodes(series_id, session):
                 f"想定していたキーがありませんでした ({e})"
             )
 
+        season_episodes = []
         for c in ep_contents:
             if c.get("type") != "episode":
                 continue
@@ -201,7 +217,7 @@ def get_latest_episodes(series_id, session):
             if not episode_id or not title:
                 # 1件くらい欠けていても全体は止めず、その1件だけスキップする
                 continue
-            episodes.append(
+            season_episodes.append(
                 {
                     "episode_id": episode_id,
                     "title": title,
@@ -209,7 +225,31 @@ def get_latest_episodes(series_id, session):
                         f"https://statics.tver.jp/images/content/thumbnail/"
                         f"episode/xlarge/{episode_id}.jpg"
                     ),
+                    "season_index": season_index,
                 }
             )
 
+        # APIは新しい順で返すので、反転して「古い→新しい」に揃える
+        season_episodes.reverse()
+        episodes.extend(season_episodes)
+
     return episodes
+
+
+def pick_latest_episode(episodes):
+    """
+    get_latest_episodes() の戻り値（古い→新しい順）から「最新の1件」を選ぶ。
+
+    シーズンをまたぐと放送日の前後関係が分からないため、
+    「一番若いseason_index（＝本編などの主シーズン）の中で一番新しいもの」
+    を最新とみなす。主シーズンのエピソードが除外キーワードで
+    全部消えている場合は、残っている中で一番若いシーズンから選ぶ。
+
+    episodes が空のときは None を返す。
+    """
+    if not episodes:
+        return None
+    main_season = min(ep["season_index"] for ep in episodes)
+    in_main_season = [ep for ep in episodes if ep["season_index"] == main_season]
+    # 古い→新しい順なので、末尾が最新
+    return in_main_season[-1]

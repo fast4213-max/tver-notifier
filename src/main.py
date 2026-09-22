@@ -92,10 +92,10 @@ def collect_unread_episodes(programs, seen_dict, session, error_messages, global
 
         already_seen = set(seen_dict.get(series_id, []))
 
-        # episodes は「配信中の全エピソード」なので、
-        # まだ通知していないもの（＝新着）だけに絞る。
-        # TVer側のAPIの並び順に依存しすぎないよう、
-        # 一覧の順序をそのまま「古い→新しい」とみなして処理する。
+        # episodes は「配信中の全エピソード」で、
+        # tver_client側で「古い→新しい」の順に揃えてある。
+        # その順序を保ったまま、まだ通知していないもの（＝新着）だけに絞る。
+        # こうすることで、通知もseen.jsonへの登録も古い話から順に行われる。
         for ep in episodes:
             if ep["episode_id"] in already_seen:
                 continue
@@ -257,7 +257,7 @@ def run_test():
         discord_notifier.send_error_log(f"[テスト実行] セッション作成に失敗しました。\n{e}")
         sys.exit(1)
 
-    # テストなので「既読」は無視し、各番組の最新1件（フィルタ通過分のうち一覧の最後の要素）を候補にする
+    # テストなので「既読」は無視し、各番組の最新1件（フィルタ通過分のうち最新のもの）を候補にする
     candidates = []
     for program in programs:
         series_url = program.get("url", "")
@@ -275,8 +275,8 @@ def run_test():
             ep for ep in episodes if not state.is_title_excluded(ep["title"], exclude_keywords)
         ]
 
-        if passable_episodes:
-            latest = passable_episodes[-1]
+        latest = tver_client.pick_latest_episode(passable_episodes)
+        if latest is not None:
             candidates.append(
                 {
                     "title": latest["title"],
