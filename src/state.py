@@ -34,6 +34,16 @@ SEEN_PATH = os.path.join(BASE_DIR, "data", "seen.json")
 SEEN_LIMIT_PER_SERIES = 500
 
 
+def _load_programs_file():
+    """
+    data/programs.json を丸ごと読み込む共通処理。
+    programs / exclude_keywords / exclude_season_keywords を
+    それぞれ別関数から読むため、ここに集約している。
+    """
+    with open(PROGRAMS_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def load_programs():
     """
     data/programs.json を読み込んで、登録されている番組(シリーズ)の
@@ -45,9 +55,7 @@ def load_programs():
         ...
     ]
     """
-    with open(PROGRAMS_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("programs", [])
+    return _load_programs_file().get("programs", [])
 
 
 def load_global_exclude_keywords():
@@ -58,9 +66,58 @@ def load_global_exclude_keywords():
 
     例: ["ダイジェスト", "解説", "インタビュー"]
     """
-    with open(PROGRAMS_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("exclude_keywords", [])
+    return _load_programs_file().get("exclude_keywords", [])
+
+
+def load_global_exclude_season_keywords():
+    """
+    data/programs.json のトップレベルにある "exclude_season_keywords" を読み込む。
+
+    こちらは「エピソードのタイトル」ではなく「シーズン名」に対する除外設定。
+    TVerは1つの番組を
+      本編 / メイキング / ダイジェスト / ナビ・予告 / 解説放送版 ...
+    のようにシーズン単位で分けているので、
+    「本編以外は要らない」という用途にはシーズン名で外す方が確実。
+
+    エピソードのタイトルで弾く方式だと、たとえば
+    「『VIVANT』続編7月スタート発表記念ムービー」のように
+    予告シーズンに属しているのにタイトルへ「予告」の字が
+    1文字も入っていないものを取りこぼしてしまうため。
+
+    例: ["ナビ", "予告", "メイキング", "ダイジェスト", "解説放送"]
+    """
+    return _load_programs_file().get("exclude_season_keywords", [])
+
+
+def get_exclude_season_keywords_for_program(program, global_season_keywords):
+    """
+    1つの番組について、実際に適用するシーズン除外キーワードの一覧を返す。
+    「全体共通」＋「その番組だけの追加分」を合体させたもの。
+
+    programs.json の1件にこう書くと、その番組だけ追加で外せる：
+    {
+        "name": "番組メモ",
+        "url": "https://tver.jp/series/srXXXXXXXX",
+        "exclude_season_keywords": ["悪役会議室"]
+    }
+    """
+    program_keywords = program.get("exclude_season_keywords", [])
+    return list(set(global_season_keywords) | set(program_keywords))
+
+
+def is_season_excluded(season_title, exclude_season_keywords):
+    """
+    シーズン名に除外キーワードのどれか1つでも含まれていたら
+    True（＝そのシーズンは丸ごと通知対象外）を返す。
+
+    ★この方式にしている理由★
+    「本編シーズンだけ通知する」という決め打ちにすると、
+    局が特番を独立シーズン（例:「新春スペシャル」）に切り出したときに
+    丸ごと取りこぼしてしまう。
+    逆に「要らないシーズン名を外す」方式なら、
+    見覚えのない新シーズンは通知される側に倒れるので取りこぼしが起きない。
+    """
+    return is_title_excluded(season_title, exclude_season_keywords)
 
 
 def get_exclude_keywords_for_program(program, global_keywords):

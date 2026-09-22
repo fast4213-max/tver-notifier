@@ -163,7 +163,8 @@ def get_latest_episodes(series_id, session):
             "episode_id": "epXXXXXXXX",
             "title": "...",
             "thumbnail_url": "...",
-            "season_index": 0,   # シーズン一覧での並び順(0が本編などの主シーズン)
+            "season_index": 0,        # シーズン一覧での並び順(0が本編などの主シーズン)
+            "season_title": "本編",    # シーズン名。丸ごと除外の判定に使う
         },
         ...
     ]
@@ -181,11 +182,14 @@ def get_latest_episodes(series_id, session):
             f"シーズン一覧取得({series_id}): 想定していたキーがありませんでした ({e})"
         )
 
-    season_ids = [
-        c["content"]["id"]
+    # シーズン名も一緒に持っておく。
+    # 呼び出し側が「このシーズンは丸ごと要らない」と判断できるようにするため。
+    seasons = [
+        (c["content"]["id"], c["content"].get("title", ""))
         for c in contents
         if c.get("type") == "season" and "content" in c and "id" in c["content"]
     ]
+    season_ids = [sid for sid, _ in seasons]
 
     if not season_ids:
         raise TverApiError(
@@ -193,7 +197,7 @@ def get_latest_episodes(series_id, session):
         )
 
     episodes = []
-    for season_index, season_id in enumerate(season_ids):
+    for season_index, (season_id, season_title) in enumerate(seasons):
         episodes_data = _call_platform_api(
             f"v1/callSeasonEpisodes/{season_id}",
             session,
@@ -226,6 +230,7 @@ def get_latest_episodes(series_id, session):
                         f"episode/xlarge/{episode_id}.jpg"
                     ),
                     "season_index": season_index,
+                    "season_title": season_title,
                 }
             )
 

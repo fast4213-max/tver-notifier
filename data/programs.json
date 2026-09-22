@@ -1,5 +1,14 @@
 {
-  "exclude_keywords": ["ダイジェスト", "解説", "インタビュー","予告"],
+  "exclude_keywords": ["ダイジェスト", "解説", "インタビュー", "予告"],
+  "exclude_season_keywords": [
+    "ナビ",
+    "予告",
+    "メイキング",
+    "ダイジェスト",
+    "解説放送",
+    "特典",
+    "PR"
+  ],
   "programs": [
     {
       "name": "イッテQ",
@@ -13,6 +22,9 @@
         "分で追いつく",
         "V_Log",
         "解説放送版"
+      ],
+      "exclude_season_keywords": [
+        "悪役会議室"
       ]
     }
   ]

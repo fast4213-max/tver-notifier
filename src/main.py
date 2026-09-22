@@ -55,7 +55,9 @@ def parse_args():
     return parser.parse_args()
 
 
-def collect_unread_episodes(programs, seen_dict, session, error_messages, global_keywords):
+def collect_unread_episodes(
+    programs, seen_dict, session, error_messages, global_keywords, global_season_keywords
+):
     """
     登録されている全番組について、未読エピソードを集める。
     ただし、タイトルに除外キーワード（ダイジェスト・解説・インタビュー等）を
@@ -82,6 +84,9 @@ def collect_unread_episodes(programs, seen_dict, session, error_messages, global
     for program in programs:
         series_url = program.get("url", "")
         exclude_keywords = state.get_exclude_keywords_for_program(program, global_keywords)
+        exclude_season_keywords = state.get_exclude_season_keywords_for_program(
+            program, global_season_keywords
+        )
         try:
             series_id = tver_client.extract_series_id(series_url)
             series_title = tver_client.get_series_title(series_id, session)
@@ -98,6 +103,10 @@ def collect_unread_episodes(programs, seen_dict, session, error_messages, global
         # こうすることで、通知もseen.jsonへの登録も古い話から順に行われる。
         for ep in episodes:
             if ep["episode_id"] in already_seen:
+                continue
+            if state.is_season_excluded(ep["season_title"], exclude_season_keywords):
+                # 予告・メイキング等のシーズンは丸ごと通知しない
+                filtered_count += 1
                 continue
             if state.is_title_excluded(ep["title"], exclude_keywords):
                 # フィルタで弾いたエピソードはseen.jsonにも入れない。
@@ -127,6 +136,7 @@ def run_normal():
 
     seen_dict = state.load_seen()
     global_keywords = state.load_global_exclude_keywords()
+    global_season_keywords = state.load_global_exclude_season_keywords()
     error_messages = []
 
     try:
@@ -138,7 +148,7 @@ def run_normal():
         sys.exit(1)
 
     unread_list, filtered_count = collect_unread_episodes(
-        programs, seen_dict, session, error_messages, global_keywords
+        programs, seen_dict, session, error_messages, global_keywords, global_season_keywords
     )
 
     # 未読のうち先頭10件だけ今回通知する。残りは何もしない＝次回に自動で持ち越される
@@ -192,6 +202,7 @@ def run_baseline():
 
     seen_dict = state.load_seen()
     global_keywords = state.load_global_exclude_keywords()
+    global_season_keywords = state.load_global_exclude_season_keywords()
     error_messages = []
 
     try:
@@ -206,6 +217,9 @@ def run_baseline():
     for program in programs:
         series_url = program.get("url", "")
         exclude_keywords = state.get_exclude_keywords_for_program(program, global_keywords)
+        exclude_season_keywords = state.get_exclude_season_keywords_for_program(
+            program, global_season_keywords
+        )
         try:
             series_id = tver_client.extract_series_id(series_url)
             episodes = tver_client.get_latest_episodes(series_id, session)
@@ -215,6 +229,9 @@ def run_baseline():
 
         registered_here = 0
         for ep in episodes:
+            if state.is_season_excluded(ep["season_title"], exclude_season_keywords):
+                total_filtered += 1
+                continue
             if state.is_title_excluded(ep["title"], exclude_keywords):
                 # フィルタ対象はbaselineでも既読登録しない。
                 # 将来フィルタ条件を変えたときに拾い直せるようにするため。
@@ -250,6 +267,7 @@ def run_test():
 
     error_messages = []
     global_keywords = state.load_global_exclude_keywords()
+    global_season_keywords = state.load_global_exclude_season_keywords()
 
     try:
         session = tver_client.create_session()
@@ -262,6 +280,9 @@ def run_test():
     for program in programs:
         series_url = program.get("url", "")
         exclude_keywords = state.get_exclude_keywords_for_program(program, global_keywords)
+        exclude_season_keywords = state.get_exclude_season_keywords_for_program(
+            program, global_season_keywords
+        )
         try:
             series_id = tver_client.extract_series_id(series_url)
             series_title = tver_client.get_series_title(series_id, session)
@@ -272,7 +293,10 @@ def run_test():
 
         # フィルタに引っかからないものだけを候補にする
         passable_episodes = [
-            ep for ep in episodes if not state.is_title_excluded(ep["title"], exclude_keywords)
+            ep
+            for ep in episodes
+            if not state.is_season_excluded(ep["season_title"], exclude_season_keywords)
+            and not state.is_title_excluded(ep["title"], exclude_keywords)
         ]
 
         latest = tver_client.pick_latest_episode(passable_episodes)
