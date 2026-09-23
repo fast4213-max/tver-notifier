@@ -13,12 +13,15 @@ Discordへの通知送信をまとめて担当するファイルです。
 """
 
 import os
+import time
+
 import requests
 
 DISCORD_EMBED_LIMIT_PER_MESSAGE = 10  # Discordの仕様上、1メッセージに入れられるEmbedの上限
 DISCORD_EMBED_TITLE_LIMIT = 256  # Discordの仕様上、Embedのtitleに入れられる文字数の上限
 DISCORD_CONTENT_LIMIT = 2000  # Discordの仕様上、contentに入れられる文字数の上限
 REQUEST_TIMEOUT = 15
+RATE_LIMIT_MAX_WAIT = 30  # 429(レート制限)時に待つ秒数の上限。これを超える指示なら諦めて失敗扱いにする
 
 
 class DiscordNotifyError(Exception):
@@ -39,6 +42,26 @@ def _get_webhook_url():
             "GitHubのSecretsを確認してください。"
         )
     return url
+
+
+def _post_webhook(webhook_url, payload):
+    """
+    Webhookへ1回POSTする。
+    Discordがレート制限(429)を返した場合は、指示された秒数だけ待って1回だけ再送する。
+    （429をそのまま失敗扱いにすると、seen.jsonが更新されず、
+      続けて送るエラー通知まで429で落ちてしまうため）
+    """
+    resp = requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT)
+    if resp.status_code == 429:
+        try:
+            wait = float(resp.json()["retry_after"])
+        except (ValueError, KeyError, TypeError):
+            wait = 1.0
+        if wait <= RATE_LIMIT_MAX_WAIT:
+            time.sleep(wait)
+            resp = requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    return resp
 
 
 def _build_embed(title, thumbnail_url, series_title):
@@ -99,8 +122,7 @@ def send_episode_notifications(episodes):
     payload = {"embeds": embeds}
 
     try:
-        resp = requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
+        _post_webhook(webhook_url, payload)
     except requests.exceptions.RequestException as e:
         raise DiscordNotifyError(f"Discordへの通知送信に失敗しました: {e}")
 
@@ -127,8 +149,7 @@ def send_error_log(message):
 
     try:
         webhook_url = _get_webhook_url()
-        resp = requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
+        _post_webhook(webhook_url, payload)
     except (DiscordNotifyError, requests.exceptions.RequestException) as e:
         # ここで失敗しても、これ以上通知する手段がないので標準出力にだけ残す
         # （GitHub Actionsのログで確認できるようにするため）

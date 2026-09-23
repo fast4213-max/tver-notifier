@@ -21,6 +21,12 @@ on:
   # 動作確認のため、GitHubの画面から手動でも実行できるようにしておきます
   workflow_dispatch: {}
 
+# check.yml と baseline.yml はどちらも seen.json を書き換えてpushするため、
+# 同時に走ると後から終わった方のpushが失敗する。同じグループにして直列実行させる。
+concurrency:
+  group: seen-json-writer
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -31,10 +37,10 @@ jobs:
 
     steps:
       - name: リポジトリを取得
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Pythonをセットアップ
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -55,7 +61,19 @@ jobs:
           # 変更があるときだけコミット＆プッシュする
           if ! git diff --cached --quiet; then
             git commit -m "既読エピソード情報を更新"
-            git push
+            # 実行中に main へ別のコミット（programs.json の編集など）が入ると
+            # そのままでは push が拒否され、通知済みなのに既読が保存されず
+            # 次回また同じ内容が通知されてしまう。最新を取り込んでから再試行する。
+            for i in 1 2 3; do
+              if git pull --rebase origin "${GITHUB_REF_NAME}" && git push; then
+                exit 0
+              fi
+              git rebase --abort 2>/dev/null || true
+              echo "pushに失敗しました。${i}回目のリトライを待機します..."
+              sleep $((i * 5))
+            done
+            echo "seen.jsonのpushに3回失敗しました。"
+            exit 1
           else
             echo "seen.jsonに変更はありませんでした。コミットはスキップします。"
           fi
