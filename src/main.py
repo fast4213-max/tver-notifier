@@ -7,7 +7,7 @@ main.py
   --mode=baseline : 初回セットアップ用。Discordには何も通知せず、
                     その時点で配信されている全エピソードを「既読」として
                     一気にseen.jsonへ登録する。
-  --mode=normal   : 本番用。未読エピソードを最大10件通知し、seen.jsonを更新する
+  --mode=normal   : 本番用。未読エピソードを最大50件（10件ずつ分けて）通知し、seen.jsonを更新する
   --mode=test     : テスト用。全番組の中から最新1件だけ通知する（seen.jsonは更新しない）
 
 ★baselineモードはなぜ必要か★
@@ -24,7 +24,8 @@ main.py
   2. data/seen.json から既読エピソードID一覧を読む
   3. TVer非公式APIで各シリーズの最新エピソード一覧を取得
   4. 既読と突き合わせて「未読」だけを抜き出す
-  5. 未読を最大10件までDiscordに通知する（11件以上は次回に持ち越し）
+  5. 未読を最大50件までDiscordに通知する（10件ずつ別メッセージに分けて送る。
+     51件以上は次回に持ち越し）
   6. 通知に成功した分だけ既読に追加し、data/seen.json を更新する
   7. 途中でエラーがあれば、その番組はスキップしてDiscordにエラーを通知し、
      他の番組の処理は続ける
@@ -32,12 +33,15 @@ main.py
 
 import argparse
 import sys
+import time
 
 import discord_notifier
 import state
 import tver_client
 
-MAX_NOTIFY_PER_RUN = 10  # Discordのレート制限対策。1回の実行で通知する最大件数
+MAX_NOTIFY_PER_RUN = 50  # 1回の実行で通知する最大件数（大量通知の防止用）。超えた分は次回に持ち越し
+BATCH_SIZE = discord_notifier.DISCORD_EMBED_LIMIT_PER_MESSAGE  # 1メッセージにまとめる件数(10件)
+BATCH_INTERVAL_SECONDS = 1  # メッセージ間の待ち時間。Discordのレート制限に引っかかりにくくするため
 
 
 def parse_args():
@@ -151,25 +155,35 @@ def run_normal():
         programs, seen_dict, session, error_messages, global_keywords, global_season_keywords
     )
 
-    # 未読のうち先頭10件だけ今回通知する。残りは何もしない＝次回に自動で持ち越される
+    # 未読のうち先頭 MAX_NOTIFY_PER_RUN 件だけ今回通知する。残りは何もしない＝次回に自動で持ち越される
     to_notify = unread_list[:MAX_NOTIFY_PER_RUN]
-    carried_over_count = len(unread_list) - len(to_notify)
+    notified_count = 0
 
     if to_notify:
-        try:
-            discord_notifier.send_episode_notifications(to_notify)
-        except discord_notifier.DiscordNotifyError as e:
-            # 通知に失敗した場合はseen.jsonを更新しない
-            # （＝次回また同じ内容で通知を再試行できるようにするため）。
-            # ここで処理を止めずに他のエラー通知は続けて送る。
-            error_messages.append(f"[Discord通知エラー]\n{e}")
-        else:
-            for ep in to_notify:
+        # Discordは1メッセージにEmbedを10件までしか入れられないため、10件ずつ分けて送る。
+        # 送信に成功したメッセージの分だけを既読にし、失敗したらそこで打ち切る
+        # （失敗したメッセージ以降は既読にしないので、次回また通知が再試行される）。
+        for start in range(0, len(to_notify), BATCH_SIZE):
+            batch = to_notify[start : start + BATCH_SIZE]
+            if start > 0:
+                time.sleep(BATCH_INTERVAL_SECONDS)
+            try:
+                discord_notifier.send_episode_notifications(batch)
+            except discord_notifier.DiscordNotifyError as e:
+                # ここで処理を止めずに他のエラー通知は続けて送る。
+                error_messages.append(f"[Discord通知エラー]\n{e}")
+                break
+            for ep in batch:
                 state.add_seen_episode(seen_dict, ep["series_id"], ep["episode_id"])
+            notified_count += len(batch)
+
+        if notified_count > 0:
             state.save_seen(seen_dict)
-            print(f"{len(to_notify)}件通知しました。")
+            print(f"{notified_count}件通知しました。")
     else:
         print("新着エピソードはありませんでした。")
+
+    carried_over_count = len(unread_list) - notified_count
 
     if filtered_count > 0:
         print(f"{filtered_count}件はフィルタ（除外キーワード）により通知対象から除外しました。")
