@@ -16,6 +16,8 @@ TverApiError という専用のエラーを投げるようにしています。
 """
 
 import re
+import time
+
 import requests
 
 # TVerのWeb版が使っているのと同じヘッダーを真似ています。
@@ -212,8 +214,13 @@ def get_latest_episodes(series_id, session):
             )
 
         season_episodes = []
+        season_lives = []
         for c in ep_contents:
-            if c.get("type") != "episode":
+            # "episode" = 通常の見逃し配信。
+            # "live" = リアルタイム配信（追っかけ再生つき）。特番(SP)などは
+            #          見逃し配信より先に、あるいは見逃し配信の代わりにこの形で載ることがある。
+            content_type = c.get("type")
+            if content_type not in ("episode", "live"):
                 continue
             content = c.get("content", {})
             episode_id = content.get("id")
@@ -221,13 +228,20 @@ def get_latest_episodes(series_id, session):
             if not episode_id or not title:
                 # 1件くらい欠けていても全体は止めず、その1件だけスキップする
                 continue
-            season_episodes.append(
+            if content_type == "live":
+                # まだ始まっていない配信予定枠は、始まってから通知する
+                # （ここで既読にもしないので、開始後の実行で拾われる）
+                start_at = content.get("startAt")
+                if isinstance(start_at, (int, float)) and start_at > time.time():
+                    continue
+                title = f"【リアルタイム配信】{title}"
+            (season_lives if content_type == "live" else season_episodes).append(
                 {
                     "episode_id": episode_id,
                     "title": title,
                     "thumbnail_url": (
                         f"https://statics.tver.jp/images/content/thumbnail/"
-                        f"episode/xlarge/{episode_id}.jpg"
+                        f"{content_type}/xlarge/{episode_id}.jpg"
                     ),
                     "season_index": season_index,
                     "season_title": season_title,
@@ -235,8 +249,11 @@ def get_latest_episodes(series_id, session):
             )
 
         # APIは新しい順で返すので、反転して「古い→新しい」に揃える
+        # リアルタイム配信は見逃し配信の後ろにまとめて返ってくるが、実際には
+        # 一番新しいことが多いので、反転後の末尾（＝新しい側）に置く
         season_episodes.reverse()
-        episodes.extend(season_episodes)
+        season_lives.reverse()
+        episodes.extend(season_episodes + season_lives)
 
     return episodes
 
