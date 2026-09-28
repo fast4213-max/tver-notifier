@@ -12,6 +12,8 @@ data/programs.json （登録番組リスト）と data/seen.json （既読エピ
 
 import json
 import os
+import re
+import unicodedata
 
 # このファイル(state.py)から見て、一つ上のフォルダにある data/ を指す
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -32,6 +34,10 @@ SEEN_PATH = os.path.join(BASE_DIR, "data", "seen.json")
 # ここは純粋に無限肥大を防ぐ最後の歯止めとして扱う。
 # （週1回放送の番組なら500件で約10年分に相当する）
 SEEN_LIMIT_PER_SERIES = 500
+
+# 通知済みのリアルタイム配信タイトルを、1シリーズあたり何件まで覚えておくか。
+# 見逃し配信は放送から数時間〜1日程度で出るので、直近の数件で十分。
+LIVE_TITLES_LIMIT_PER_SERIES = 20
 
 
 def _load_programs_file():
@@ -160,14 +166,54 @@ def load_seen():
         "srtxft431v": ["epcccccccc"]
     }
     """
+    return _load_seen_file().get("series", {})
+
+
+def _load_seen_file():
     if not os.path.exists(SEEN_PATH):
         return {}
     with open(SEEN_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("series", {})
+        return json.load(f)
 
 
-def save_seen(seen_dict):
+def load_live_titles():
+    """
+    data/seen.json の "live_titles" を読み込む。
+    リアルタイム配信として通知済みの番組タイトル（正規化済み）をシリーズごとに記録したもの。
+
+    ★なぜ必要か★
+    特番などは「リアルタイム配信(live)」と、放送後の「見逃し配信(episode)」が
+    別々のIDでTVerに載る。IDだけで既読判定すると、同じ放送が2回通知されてしまう。
+    そこでliveで通知したタイトルを覚えておき、同じタイトルの見逃し配信は
+    通知せずに既読扱いにする。
+
+    戻り値の例: {"sr9gfdf2ex": ["【世界遺産駅伝】...SP"]}
+    """
+    return _load_seen_file().get("live_titles", {})
+
+
+def normalize_title(title):
+    """タイトル比較用に、全角半角の揺れと空白を吸収する。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", title or ""))
+
+
+def is_notified_as_live(live_titles, series_id, title):
+    """見逃し配信のタイトルが、リアルタイム配信として通知済みのものと同じならTrue。"""
+    normalized = normalize_title(title)
+    return bool(normalized) and normalized in live_titles.get(series_id, [])
+
+
+def add_live_title(live_titles, series_id, title):
+    """リアルタイム配信として通知したタイトルを記録する（保存は save_seen() で行う）。"""
+    normalized = normalize_title(title)
+    if not normalized:
+        return
+    titles = live_titles.setdefault(series_id, [])
+    if normalized not in titles:
+        titles.append(normalized)
+
+
+def save_seen(seen_dict, live_titles=None):
     """
     既読エピソードID一覧を data/seen.json に書き込む。
     各シリーズごとに直近 SEEN_LIMIT_PER_SERIES 件だけ残し、
@@ -181,8 +227,20 @@ def save_seen(seen_dict):
     for series_id, episode_ids in seen_dict.items():
         trimmed[series_id] = episode_ids[-SEEN_LIMIT_PER_SERIES:]
 
+    data = {"series": trimmed}
+    # live_titles を渡されなかった場合（baselineモード等）も、既存の記録は消さずに残す
+    if live_titles is None:
+        live_titles = load_live_titles()
+    live_trimmed = {
+        series_id: titles[-LIVE_TITLES_LIMIT_PER_SERIES:]
+        for series_id, titles in live_titles.items()
+        if titles
+    }
+    if live_trimmed:
+        data["live_titles"] = live_trimmed
+
     with open(SEEN_PATH, "w", encoding="utf-8") as f:
-        json.dump({"series": trimmed}, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
 

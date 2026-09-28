@@ -60,7 +60,13 @@ def parse_args():
 
 
 def collect_unread_episodes(
-    programs, seen_dict, session, error_messages, global_keywords, global_season_keywords
+    programs,
+    seen_dict,
+    session,
+    error_messages,
+    global_keywords,
+    global_season_keywords,
+    live_titles=None,
 ):
     """
     登録されている全番組について、未読エピソードを集める。
@@ -74,6 +80,8 @@ def collect_unread_episodes(
             "title": "エピソードタイトル",
             "series_title": "番組名",
             "thumbnail_url": "https://...",
+            "is_live": False,
+            "base_title": "エピソードタイトル",
         },
         ...
     ]
@@ -81,9 +89,14 @@ def collect_unread_episodes(
 
     1番組の取得でエラーが起きても、そのエラーメッセージを error_messages に
     追加した上で、その番組だけスキップして処理を続ける。
+
+    live_titles を渡した場合、リアルタイム配信として通知済みの放送と同じタイトルの
+    見逃し配信は、通知せずに seen_dict へ既読として追加する（同じ放送の二重通知防止）。
+    その件数を3つ目の戻り値として返す。
     """
     unread_list = []
     filtered_count = 0
+    duplicate_count = 0
 
     for program in programs:
         series_url = program.get("url", "")
@@ -118,6 +131,16 @@ def collect_unread_episodes(
                 # 再度候補として拾えるようにするため。
                 filtered_count += 1
                 continue
+            if (
+                live_titles is not None
+                and not ep["is_live"]
+                and state.is_notified_as_live(live_titles, series_id, ep["base_title"])
+            ):
+                # リアルタイム配信で通知済みの放送が見逃し配信として出てきたもの。
+                # 通知はせず既読にだけしておく。
+                state.add_seen_episode(seen_dict, series_id, ep["episode_id"])
+                duplicate_count += 1
+                continue
             unread_list.append(
                 {
                     "series_id": series_id,
@@ -125,10 +148,12 @@ def collect_unread_episodes(
                     "title": ep["title"],
                     "series_title": series_title,
                     "thumbnail_url": ep["thumbnail_url"],
+                    "is_live": ep["is_live"],
+                    "base_title": ep["base_title"],
                 }
             )
 
-    return unread_list, filtered_count
+    return unread_list, filtered_count, duplicate_count
 
 
 def run_normal():
@@ -139,6 +164,7 @@ def run_normal():
         return
 
     seen_dict = state.load_seen()
+    live_titles = state.load_live_titles()
     global_keywords = state.load_global_exclude_keywords()
     global_season_keywords = state.load_global_exclude_season_keywords()
     error_messages = []
@@ -151,8 +177,14 @@ def run_normal():
         discord_notifier.send_error_log(f"セッション作成に失敗し、処理全体を中止しました。\n{e}")
         sys.exit(1)
 
-    unread_list, filtered_count = collect_unread_episodes(
-        programs, seen_dict, session, error_messages, global_keywords, global_season_keywords
+    unread_list, filtered_count, duplicate_count = collect_unread_episodes(
+        programs,
+        seen_dict,
+        session,
+        error_messages,
+        global_keywords,
+        global_season_keywords,
+        live_titles,
     )
 
     # 未読のうち先頭 MAX_NOTIFY_PER_RUN 件だけ今回通知する。残りは何もしない＝次回に自動で持ち越される
@@ -175,13 +207,20 @@ def run_normal():
                 break
             for ep in batch:
                 state.add_seen_episode(seen_dict, ep["series_id"], ep["episode_id"])
+                if ep["is_live"]:
+                    state.add_live_title(live_titles, ep["series_id"], ep["base_title"])
             notified_count += len(batch)
 
         if notified_count > 0:
-            state.save_seen(seen_dict)
             print(f"{notified_count}件通知しました。")
     else:
         print("新着エピソードはありませんでした。")
+
+    if notified_count > 0 or duplicate_count > 0:
+        state.save_seen(seen_dict, live_titles)
+
+    if duplicate_count > 0:
+        print(f"{duplicate_count}件はリアルタイム配信で通知済みの放送のため、通知せず既読にしました。")
 
     carried_over_count = len(unread_list) - notified_count
 
@@ -215,6 +254,7 @@ def run_baseline():
         return
 
     seen_dict = state.load_seen()
+    live_titles = state.load_live_titles()
     global_keywords = state.load_global_exclude_keywords()
     global_season_keywords = state.load_global_exclude_season_keywords()
     error_messages = []
@@ -252,12 +292,15 @@ def run_baseline():
                 total_filtered += 1
                 continue
             state.add_seen_episode(seen_dict, series_id, ep["episode_id"])
+            if ep["is_live"]:
+                # 後から出てくる同じ放送の見逃し配信を「新着」と誤認しないように記録する
+                state.add_live_title(live_titles, series_id, ep["base_title"])
             registered_here += 1
 
         total_registered += registered_here
         print(f"{series_url} : {registered_here}件を既読登録しました。")
 
-    state.save_seen(seen_dict)
+    state.save_seen(seen_dict, live_titles)
     print(f"合計 {total_registered} 件を既読として登録しました。（Discord通知はしていません）")
     if total_filtered > 0:
         print(f"{total_filtered}件はフィルタ（除外キーワード）により既読登録の対象外としました。")

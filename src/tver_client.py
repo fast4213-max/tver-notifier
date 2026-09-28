@@ -167,6 +167,8 @@ def get_latest_episodes(series_id, session):
             "thumbnail_url": "...",
             "season_index": 0,        # シーズン一覧での並び順(0が本編などの主シーズン)
             "season_title": "本編",    # シーズン名。丸ごと除外の判定に使う
+            "is_live": False,         # リアルタイム配信枠ならTrue
+            "base_title": "...",      # 【リアルタイム配信】を付ける前の元タイトル
         },
         ...
     ]
@@ -225,6 +227,7 @@ def get_latest_episodes(series_id, session):
             content = c.get("content", {})
             episode_id = content.get("id")
             title = content.get("title")
+            base_title = title
             if not episode_id or not title:
                 # 1件くらい欠けていても全体は止めず、その1件だけスキップする
                 continue
@@ -245,6 +248,10 @@ def get_latest_episodes(series_id, session):
                     ),
                     "season_index": season_index,
                     "season_title": season_title,
+                    # 同じ放送の「リアルタイム配信」と「見逃し配信」を突き合わせて
+                    # 二重通知を防ぐため、接頭辞を付ける前の元タイトルも持っておく
+                    "is_live": content_type == "live",
+                    "base_title": base_title,
                 }
             )
 
